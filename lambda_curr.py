@@ -11,6 +11,15 @@ import botocore.exceptions
 import wikipedia as wp
 
 
+INCOME = ['common_stock_dividends', 'income_loss_before_equity_method_investments', 'net_income_loss_available_to_common_stockholders_basic', 'net_income_loss_attributable_to_parent', 'net_income_loss', 'participating_securities_distributed_and_undistributed_earnings_loss_basic', 'income_loss_from_equity_method_investments', 'selling_general_and_administrative_expenses', 'diluted_earnings_per_share', 'basic_earnings_per_share', 'net_income_loss_attributable_to_noncontrolling_interest', 'income_tax_expense_benefit', 'income_loss_from_continuing_operations_after_tax', 'preferred_stock_dividends_and_other_adjustments', 'income_loss_from_continuing_operations_before_tax', 'costs_and_expenses', 'interest_expense_operating']
+
+
+COMPREHENSIVE = ['comprehensive_income_loss_attributable_to_noncontrolling_interest', 'other_comprehensive_income_loss', 'comprehensive_income_loss', 'comprehensive_income_loss_attributable_to_parent']
+
+BALANCE = ['equity', 'assets', 'noncurrent_assets', 'accounts_receivable', 'equity_attributable_to_noncontrolling_interest', 'fixed_assets', 'current_assets', 'liabilities_and_equity', 'liabilities', 'equity_attributable_to_parent', 'other_current_assets', 'current_liabilities', 'long_term_investments', 'noncurrent_liabilities', 'other_noncurrent_assets', 'commitments_and_contingencies']
+
+CASH = ['net_cash_flow_from_investing_activities_continuing', 'net_cash_flow_from_operating_activities_continuing', 'net_cash_flow_from_financing_activities', 'exchange_gains_losses', 'net_cash_flow', 'net_cash_flow_from_investing_activities', 'net_cash_flow_from_financing_activities_continuing', 'net_cash_flow_from_operating_activities', 'net_cash_flow_continuing']
+
 
 def get_table(title, match, use_cache=False):
 
@@ -199,7 +208,7 @@ def get_full_quarterly(ticker, sheet, code, stock, seen_times):
 
 # Reset index if desired
     combined.reset_index(drop=True, inplace=True)
-    if stock:
+    if sheet == 'balance':
         data = impute_q4_from_annual_stock(combined)
     else:
         data = impute_q4_from_annual_flow(combined)
