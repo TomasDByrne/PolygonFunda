@@ -3,12 +3,12 @@ from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 import pandas as pd
 import time as t
-import boto3
+# import boto3
 from datetime import datetime
 import io
 import pandas as pd
-import botocore.exceptions
-import wikipedia as wp
+# import botocore.exceptions
+# import wikipedia as wp
 
 
 INCOME = ['common_stock_dividends', 'income_loss_before_equity_method_investments', 'net_income_loss_available_to_common_stockholders_basic', 'net_income_loss_attributable_to_parent', 'net_income_loss', 'participating_securities_distributed_and_undistributed_earnings_loss_basic', 'income_loss_from_equity_method_investments', 'selling_general_and_administrative_expenses', 'diluted_earnings_per_share', 'basic_earnings_per_share', 'net_income_loss_attributable_to_noncontrolling_interest', 'income_tax_expense_benefit', 'income_loss_from_continuing_operations_after_tax', 'preferred_stock_dividends_and_other_adjustments', 'income_loss_from_continuing_operations_before_tax', 'costs_and_expenses', 'interest_expense_operating']
@@ -28,6 +28,7 @@ ALL = [['income', ['common_stock_dividends', 'income_loss_before_equity_method_i
 ['cash', ['net_cash_flow_from_investing_activities_continuing', 'net_cash_flow_from_operating_activities_continuing', 'net_cash_flow_from_financing_activities', 'exchange_gains_losses', 'net_cash_flow', 'net_cash_flow_from_investing_activities', 'net_cash_flow_from_financing_activities_continuing', 'net_cash_flow_from_operating_activities', 'net_cash_flow_continuing']
 ]]
 
+BIG =[['comprehensive', ['comprehensive_income_loss']]]
 
 def get_table(title, match, use_cache=False):
 
@@ -114,23 +115,40 @@ def get_financial_data_comprehensive(data, code):
     final = []
     if 'results' in data:
         for item in data['results']:
+            #print(item['financials']['comprehensive_income'])
             if code in item['financials']['comprehensive_income']:
                 final.append([to_unix_1pm_est(item['filing_date']), item['financials']['comprehensive_income'][code]['value']])
     return final
 
 
 def merge_dataframes(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
+    # Check if both dataframes are empty
+    if df1.empty and df2.empty:
+        return pd.DataFrame()
+
+    # If one of the dataframes is empty, return the non-empty one
+    if df1.empty:
+        return df2.reset_index(drop=True)
+    if df2.empty:
+        return df1.reset_index(drop=True)
+
     # Merge on 'timestamp', using an outer join to keep all timestamps
     merged = pd.merge(df1, df2, on='timestamp', how='outer')
-    
+
     # Sort by timestamp
     merged = merged.sort_values('timestamp').reset_index(drop=True)
-    
+
     # Fill missing values with 0
     merged = merged.fillna(0)
-    
-    return merged
 
+    # Replace zeros with the value from above if possible
+    for column in merged.columns:
+        if column != 'timestamp':  # Skip the timestamp column
+            # Use .ffill() and then convert objects to their appropriate types
+            merged[column] = merged[column].replace(0, pd.NA).ffill().fillna(0)
+            merged[column] = merged[column].infer_objects()
+
+    return merged
 
 # Ticker is all caps string: "NVDA"
 #Sheet is one of four strings "balance", "income", "cash", "comprehensive"
@@ -138,9 +156,9 @@ def merge_dataframes(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
 #period is either "Q" or "A"
 def get_data(ticker, sheet, code, period):
     if period == 'Q':
-        BASE_URL = 'https://api.polygon.io/vX/reference/financials?ticker=' + ticker + '&filing_date.gte=2009-01-01&timeframe=quarterly&order=asc&limit=100&sort=filing_date&apiKey=1282oQR0Wchq4TZXfjuXyEJqF6fmNvXX' 
+        BASE_URL = 'https://api.polygon.io/vX/reference/financials?ticker=' + ticker + '&filing_date.gte=2021-01-01&timeframe=quarterly&order=asc&limit=100&sort=filing_date&apiKey=1282oQR0Wchq4TZXfjuXyEJqF6fmNvXX' 
     elif period == "A":
-        BASE_URL = 'https://api.polygon.io/vX/reference/financials?ticker=' + ticker + '&filing_date.gte=2010-01-01&timeframe=annual&order=asc&limit=100&sort=filing_date&apiKey=1282oQR0Wchq4TZXfjuXyEJqF6fmNvXX' 
+        BASE_URL = 'https://api.polygon.io/vX/reference/financials?ticker=' + ticker + '&filing_date.gte=2021-01-01&timeframe=annual&order=asc&limit=100&sort=filing_date&apiKey=1282oQR0Wchq4TZXfjuXyEJqF6fmNvXX' 
     params = {
     'ticker': ticker,
     'limit': 100,  # How many financial statements to return
@@ -156,6 +174,7 @@ def get_data(ticker, sheet, code, period):
     elif sheet == 'cash':
         return get_financial_data_cash(data, code)
     elif sheet == 'comprehensive':
+        #print('comprehensive')
         return get_financial_data_comprehensive(data, code)
     else:
         return
@@ -191,15 +210,24 @@ def impute_q4_from_annual_stock(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def get_full_quarterly(ticker, sheet, code, stock, seen_times):
+def get_full_quarterly(ticker, sheet, code, seen_times):
     # print(ticker)
     Annual = pd.DataFrame(get_data(ticker, sheet, code, 'A'))
     Quarterly = pd.DataFrame(get_data(ticker, sheet, code, 'Q'))
+    # print('why')
+    # print([ticker, sheet, code])
+    # print(get_data(ticker, sheet, code, 'Q'))
+    
+    if Annual.empty or Quarterly.empty:
+        return pd.DataFrame()
     #print("here_full")
     # print(Annual)
     # print(Quarterly)
     # print(ticker)
-    Annual.columns = ['timestamp', 'annual']
+    try: 
+        Annual.columns = ['timestamp', 'annual']
+    except IndexError:
+        pass
     try:
         Quarterly.columns = ['timestamp', 'quarterly']
     except IndexError:
@@ -226,179 +254,42 @@ def get_full_quarterly(ticker, sheet, code, stock, seen_times):
     # print(data)
     # print(list(seen_times)[:10])
     # print(len(data))
-    df = data[~data['timestamp'].apply(
-        lambda ts: any(abs(int(ts) - int(seen)) <= threshold for seen in seen_times)
-    )]
+    # df = data[~data['timestamp'].apply(
+    #     lambda ts: any(abs(int(ts) - int(seen)) <= threshold for seen in seen_times)
+    # )]
+    return data
     # print(len(df))
     # assert False
     return df
 
-def fill_zeros_after_first_nonzero(df: pd.DataFrame) -> pd.DataFrame:
-    df_copy = df.copy()
-    
-    for col in df.columns:
-        first_nonzero_found = False
-        for idx in df.index:
-            value = df.at[idx, col]
-            
-            if not first_nonzero_found:
-                if value != 0:
-                    first_nonzero_found = True
-                continue
-            
-            if first_nonzero_found and value == 0:
-                # Replace 0 with the value above
-                df_copy.at[idx, col] = df_copy.at[idx - 1, col]
-    
-    return df_copy
-
-#print(get_full_quarterly('NVDA', 'income', 'net_income_loss', False))
-
-def save_tickers(the_list):
-    with open('tickers.txt', 'w') as f:
-        for ticker in the_list:
-            f.write(ticker + '\n')
-            
-
-def get_prev_sp500():
-   
-    ans = set()
-    client = boto3.client('timestream-query')
-    query_string = f"""SELECT Distinct Ticker FROM "{DATABASENAME}"."{TABLENAME}" """
-    response = client.query(QueryString=query_string)
-    for row in response['Rows']:
-        # print(row)
-        values = [datum.get('ScalarValue') for datum in row['Data']]
-        for item in values:
-            ans.add(item)
-    # print("TIMES", ans)
-    return list(ans)
-    
-def get_current_historical_sp500():
-    # print("HEY")
-    all_tickers = list(set(get_curr_sp500() + get_prev_sp500()))
-    # save_tickers(all_tickers)
-    # print(all_tickers)
-    return all_tickers
-    
-STOCKS = get_current_historical_sp500()
-
-# Here is the function we want. It takes in:
-#  Stocks - a list of tickers
-#  Sheet - where in the balance sheet it comes from. One of four strings 'income', 'balance, 'cash' or 'comprehensive'
-#  Code - the dictionary key of the thing you want - 'net_income_loss' for instance
-#  Stock - a boolean if the statistic is a stock i.e. a measure of how much of something the have at that moment i.e. "assets, liabilites"
-#  Otherwise, the statistic is assumed to be a flow, a measure of how much of something occured over the previous period - "net_income_loss" for instance.
-
-def get_all_quarterly(stocks, sheet, code, stock, seen_times):
-    data = get_full_quarterly(stocks[0], sheet, code, stock, seen_times)
+#SEEN TIME PLEASE FIX
+def create_dataframe(stocks, seen_time):
+    dataframes = {}
+    for sheet in ALL:
+        for datatype in sheet[1]:
+            dataframes[datatype] = get_full_quarterly(stocks[0], sheet[0], datatype, seen_time)
     i = 1
-    #print(data)
     while i < len(stocks):
-        # t.sleep(30)
-        # print(stocks[i])
-        try:
-            new = get_full_quarterly(stocks[i], sheet, code, stock, seen_times)
-            data = merge_dataframes(data, new)
-        except ValueError:
-            print(stocks[i], 'missing some data, not completed')
+        for sheet in ALL:
+            for datatype in sheet[1]:
+                try: 
+                    #print(get_full_quarterly(stocks[i], sheet[0], datatype, seen_time))
+                    temp = get_full_quarterly(stocks[i], sheet[0], datatype, seen_time)
+                    data = merge_dataframes(dataframes[datatype], temp)
+                    dataframes[datatype] = data
+                except ValueError:
+                    print(stocks[i], 'missing some data, not completed')
         i += 1
-        
-    return fill_zeros_after_first_nonzero(data)
+    return dataframes
 
-def upload_the_lot_weekly(the_data, meas):
-    # uploaded_times = get_uploaded_times(meas)
-    client = boto3.client('timestream-write')
-    current_time_seconds = t.time()
-    timestamp_milliseconds = str(int(current_time_seconds * 1000))
-    records = []
-    for col in the_data.columns:
-        # print("COL:", col)
-        if col == 'timestamp':
-            continue  # Skip the timestamp column
-        for idx, value in enumerate(the_data[col]):
-            timestamp = str(int(the_data.loc[idx, 'timestamp']) * 1000) 
-        # print(f"Column: {col}, Timestamp: {timestamp}, Value: {value}")
-            dimension = [{'Name': 'Ticker', 'Value': col}]
-            record = {'Time': timestamp, 'Dimensions': dimension, 'MeasureName': meas, 'MeasureValue': str(float(value))}
-            records.append(record)
-            if len(records) >= 100:
-              try:
-                response = client.write_records(
-                    DatabaseName=DATABASENAME,
-                TableName=TABLENAME,
-                    Records=records
-                )
-                # print("Write successful:", response)
-                records = []
-              except botocore.exceptions.ClientError as e:
-                records = []
-                print(e.response)
-                if e.response['Error']['Code'] == 'RejectedRecordsException':
-                    print("Some records were rejected:")
-                    for rejected in e.response['RejectedRecords']:
-                        print(f"Index: {rejected.get('RecordIndex')}, Reason: {rejected.get('Reason')}")
-                        if 'ExistingVersion' in rejected:
-                            print(f"ExistingVersion: {rejected['ExistingVersion']}")
-                else:
-                    raise  # Re-raise if it's a different error
-              records = []
-              
-    if len(records) > 0:
-        try:
-                response = client.write_records(
-                    DatabaseName=DATABASENAME,
-                TableName=TABLENAME,
-                    Records=records
-                )
-                print("Write successful:", response)
+if __name__ == "__main__":
+    # Example usage
+    #print(get_data('AAPL', 'comprehensive', 'comprehensive_income_loss', 'Q'))
+    #print(get_full_quarterly('AAPL', 'comprehensive', 'net_income_loss', 0))
+    stocks = ["GOOGL", 'NVDA', "AAPL", "MSFT"]  # Replace with your actual list of stocks
+    seen_time = 100 
+    #print(get_full_quarterly('AAPL', 'comprehensive', 'comprehensive_income_loss', 100))
+    dataframes = create_dataframe(stocks, seen_time)
+    print(dataframes)
 
-        except botocore.exceptions.ClientError as e:
-                if e.response['Error']['Code'] == 'RejectedRecordsException':
-                    print("Some records were rejected:")
-                    for rejected in e.response['RejectedRecords']:
-                        print(f"Index: {rejected.get('RecordIndex')}, Reason: {rejected.get('Reason')}")
-                        if 'ExistingVersion' in rejected:
-                            print(f"ExistingVersion: {rejected['ExistingVersion']}")
-                else:
-                    raise  # Re-raise if it's a different error
-        return
 
-def get_uploaded_times(measure):
-    times_ans = set()
-    client = boto3.client('timestream-query')
-    query_string =  f"""SELECT Distinct time FROM "{DATABASENAME}"."{TABLENAME}" """
-    response = client.query(QueryString=query_string)
-    # print(response['Rows'])
-    for row in response['Rows']:
-        values = [datum.get('ScalarValue') for datum in row['Data']]
-        for item in values:
-            times_ans.add(int(stampify(item)) // 1000)
-    # print("TIMES", times_ans)
-    
-    # print(times_ans)
-  
-    return times_ans
-        
-
-NO_NEW_STOCKS = True
-
-def lambda_handler(event, context):
-    if NO_NEW_STOCKS:
-        times = get_uploaded_times('net_income_loss')
-    else:
-        times = []
-    print("TIMES IS", times)
-  
-    get_curr_sp500()
-    # print(get_curr_sp500)
-    data = get_all_quarterly(STOCKS, 'income', 'net_income_loss', False, times)
-    # print(data)
-    upload_the_lot_weekly(data, 'net_income_loss')
-    # print()
-
-    
-    return {
-        'statusCode': 200,
-        'body': 's'
-    }
